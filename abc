@@ -1,0 +1,105 @@
+/************************************************************************************
+* STEP ONE: Extract Compustat data;
+************************************************************************************/
+ 
+* Selected GVKEYS-- use quotes to be consistent with character variables;
+%let glist = '006066' '012141'  '001690';  
+ 
+* Date range-- applied to FYEAR (Fiscal Year);
+%let fyear1= 2010; 
+%let fyear2= 2020;
+ 
+*  Selected data items (GVKEY, DATADATE, FYEAR and FYR are automatialy included);
+%let vars=  gvkey fyr fyear datadate SALE AT INDFMT DATAFMT POPSRC CONSOL;
+ 
+* Make extract from Compustat Annual Funda file;
+data compx2;
+   set comp.funda (keep= &vars);
+   where gvkey in (&glist) and fyear between &fyear1 and &fyear2;
+   if indfmt='INDL' and datafmt='STD' and popsrc='D' and consol='C';
+   * create begin and end dates for fiscal year;
+   format endfyr begfyr date9.;
+   endfyr= datadate;
+   begfyr= intnx('month',endfyr,-11,'beg');  /* intnx(interval, from, n, 'aligment') */
+   sxa= sale/at;  * compute sales over assets ratio;
+   keep gvkey begfyr endfyr sxa fyr fyear;* keep only relevant variables;
+run;
+ 
+proc sort; by gvkey endfyr; run;
+ 
+proc print data=&syslast(obs=100);
+  by gvkey;
+  id fyear;
+  var fyear begfyr endfyr sxa;
+run;
+ 
+/*******************************************************************************************
+* STEP TWO: Link GVKEYS to CRSP Identifiers;                                               *
+* Use CCMXPF_LNKHIST table to obtain CRSP identifiers for our subset of companies/dates;   *
+********************************************************************************************/
+   
+proc sql;
+  create table mydata as select *
+  from compx2 as a, crsp.ccmxpf_lnkhist as b
+  where a.gvkey = b.gvkey and
+  b.LINKTYPE in ("LU","LC","LD","LN","LS","LX") and
+  (b.LINKDT <= a.endfyr or b.LINKDT = .B) and (a.endfyr <= b.LINKENDDT or b.LINKENDDT = .E);               
+ /******************************************************************************************
+  * The previous condition requires the end of fiscal year to fall within the link range.  *
+  *                                                                                        *
+  * A more relaxed condition would require any part of the fiscal year to be within the    *
+  * link range:                                                                            *
+  * (b.LINKDT <= a.endfyr or missing(b.LINKDT) = 1) and (b.LINKENDDT >= a.begfyr or        *
+  * missing(b.LINKENDDT)= 1);                                                              *
+  * or a more strict condition would require the entire fiscal year to be within           *
+  * the link range :                                                                       *
+  * (b.LINKDT <= a.begfyr or missing(b.LINKDT) = 1) and                                    *
+  * (a.endfyr <= b.LINKENDDT or b.LINKENDDT= .E);                                          *
+  *                                                                                        *
+  * If these conditions are used, we suggest using the result data set from the            *
+  * "collapsing" procedure -                                                               *
+  * which is shown in sample program ccm_lnktable.sas - to replace crsp.ccmxpf_linktable.  *
+  ******************************************************************************************/
+quit;
+ 
+proc print data=&syslast(obs=50);
+  by gvkey;
+  id fyear;
+run;
+ 
+/***************************************************************************************
+* STEP THREE: Add CRSP Monthly price data;
+***************************************************************************************/
+ 
+* Option 1: Simple match at the end of the fiscal year;
+ 
+proc sql;
+    create table mydata2 as select *
+        from mydata as a, crsp.msf as b
+        where a.lpermno = b.permno and
+        month(a.endfyr)=month(b.date) and year(a.endfyr)=year(b.date);
+    quit;
+ 
+proc print data=mydata2 (obs=30);
+    var gvkey permno endfyr date sxa prc ret;
+run;
+ 
+/************************************************************************************
+* Option 2: Alternative way of matching CRSP data;
+* Match accounting data with fiscal yearends in month 't',
+  with CRSP return data from month 't+3' to month 't+14' (12 months);
+*************************************************************************************/
+/*
+proc sql;
+create table mydata2 as select *
+from mydata as a, crsp2.msf as b
+where a.lpermno = b.permno and
+    intck('month',a.endfyr,b.date) between 3 and 14;
+quit;
+*/
+     
+ 
+/* ********************************************************************************* */
+/* *************  Material Copyright Wharton Research Data Services  *************** */
+/* ****************************** All Rights Reserved ****************************** */
+/* ********************************************************************************* */
